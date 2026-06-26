@@ -1,0 +1,6 @@
+[submodule "workplace-api"]
+	path = workplace-api
+	url = https://github.com/uu-1124/workplace-api.git
+[submodule "workplace-desktop-electron"]
+	path = workplace-desktop-electron
+	url = https://github.com/uu-1124/workplace-desktop-electron.git
