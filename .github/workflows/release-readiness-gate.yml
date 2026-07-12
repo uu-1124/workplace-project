@@ -52,6 +52,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout pinned previous desktop release
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/workplace-desktop-electron
+          ref: 7dda20c047627ac714898f08b18ca9787f000cf5
+          token: ${{ steps.app-token.outputs.token }}
+          path: previous-desktop
+          persist-credentials: false
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -64,7 +73,9 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: workplace-desktop-electron/package-lock.json
+          cache-dependency-path: |
+            workplace-desktop-electron/package-lock.json
+            previous-desktop/package-lock.json
 
       - name: Verify release identity
         run: node scripts/verify-release-manifest.mjs
@@ -75,6 +86,10 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: workplace-desktop-electron
+        run: npm ci
+
+      - name: Install pinned previous desktop dependencies
+        working-directory: previous-desktop
         run: npm ci
 
       - name: Run full backend regression
@@ -113,6 +128,10 @@ jobs:
         working-directory: workplace-desktop-electron
         run: xvfb-run -a npm run test:release -- --base-url http://127.0.0.1:8000 --prefix root-release-ui
 
+      - name: Run previous desktop release gate against current PostgreSQL API
+        working-directory: previous-desktop
+        run: xvfb-run -a npm run test:release -- --base-url http://127.0.0.1:8000 --prefix previous-release-ui
+
       - name: Upload integration diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -123,6 +142,7 @@ jobs:
           path: |
             work/release-api.log
             work/sales-ui-smoke-*.png
+            previous-desktop/work/sales-ui-smoke-*.png
 
   windows-package:
     name: Windows packaged application and installer gate
