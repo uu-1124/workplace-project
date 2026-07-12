@@ -1,9 +1,9 @@
 {
-  "release_id": "2026.07.12-r0.2",
+  "release_id": "2026.07.12-r0.3",
   "released_at": "2026-07-12",
   "components": {
     "root": {
-      "source_commit": "a77e5f414466d5dc575fb9247a94bb2dce8a7ba4"
+      "source_commit": "c2042751c03675341faf157a613123d7c4201679"
     },
     "api": {
       "commit": "14bc62e02e5e6bd35dc761961660e29f77e22e8d",
@@ -11,7 +11,7 @@
       "migration_head": "20260712_0031"
     },
     "desktop": {
-      "commit": "4f496abdef9822645e211b4b36eda7395f9542cf",
+      "commit": "7dda20c047627ac714898f08b18ca9787f000cf5",
       "package_version": "2.0.0"
     }
   },
