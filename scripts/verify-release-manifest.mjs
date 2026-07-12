@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -18,7 +18,10 @@ function gitlink(path) {
 
 const desktopPackage = JSON.parse(readFileSync(resolve(desktopPath, 'package.json'), 'utf8'))
 const apiConfig = readFileSync(resolve(apiPath, 'app', 'config.py'), 'utf8')
-const migration = readFileSync(resolve(apiPath, 'migrations', 'versions', `${manifest.components.api.migration_head}_adapter_audit_events.py`), 'utf8')
+const migrationDirectory = resolve(apiPath, 'migrations', 'versions')
+const migrationName = readdirSync(migrationDirectory).find(name => name.startsWith(`${manifest.components.api.migration_head}_`) && name.endsWith('.py'))
+if (!migrationName) fail(`API migration ${manifest.components.api.migration_head} is not present`)
+const migration = readFileSync(resolve(migrationDirectory, migrationName), 'utf8')
 
 const currentRootCommit = git(['rev-parse', 'HEAD'])
 try {
