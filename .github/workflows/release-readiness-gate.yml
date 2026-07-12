@@ -128,7 +128,7 @@ jobs:
     name: Windows packaged application and installer gate
     needs: postgres-phase-one
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         shell: pwsh
@@ -155,6 +155,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout pinned previous desktop release
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/workplace-desktop-electron
+          ref: 7dda20c047627ac714898f08b18ca9787f000cf5
+          token: ${{ steps.app-token.outputs.token }}
+          path: previous-desktop
+          persist-credentials: false
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
@@ -169,6 +178,10 @@ jobs:
         working-directory: workplace-desktop-electron
         run: npm ci
 
+      - name: Install pinned previous desktop dependencies
+        working-directory: previous-desktop
+        run: npm ci
+
       - name: Prepare pinned NSIS toolchain
         working-directory: workplace-desktop-electron
         run: |
@@ -176,6 +189,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $target | Out-Null
           Invoke-WebRequest -Uri 'https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-3.0.4.1/nsis-3.0.4.1.7z' -OutFile (Join-Path $target 'nsis-3.0.4.1.7z')
           Invoke-WebRequest -Uri 'https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-resources-3.4.1/nsis-resources-3.4.1.7z' -OutFile (Join-Path $target 'nsis-resources-3.4.1.7z')
+          $previousTarget = Join-Path (Resolve-Path '..\previous-desktop') 'work\electron-builder-binaries'
+          New-Item -ItemType Directory -Force -Path $previousTarget | Out-Null
+          Copy-Item -Path (Join-Path $target '*.7z') -Destination $previousTarget -Force
 
       - name: Build and launch unpacked application
         working-directory: workplace-desktop-electron
@@ -184,12 +200,17 @@ jobs:
           npm run test:package
           npm run test:packaged-app
 
+      - name: Build pinned previous installer
+        working-directory: previous-desktop
+        run: npm run electron:build:installer
+
       - name: Build and verify installer lifecycle
         working-directory: workplace-desktop-electron
         run: |
           npm run electron:build:installer
           node scripts/smoke-installer.mjs | Tee-Object -FilePath dist-electron/installer-smoke.json
           node scripts/smoke-installer-lifecycle.mjs | Tee-Object -FilePath dist-electron/installer-lifecycle-smoke.json
+          node scripts/smoke-installer-upgrade.mjs --previous-version 2.0.0 --previous-installer "..\previous-desktop\dist-electron\SoloOps Console Setup 2.0.0.exe" | Tee-Object -FilePath dist-electron/installer-upgrade-smoke.json
 
       - name: Upload verified installer
         uses: actions/upload-artifact@v7
@@ -202,3 +223,4 @@ jobs:
             workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.1.exe.blockmap
             workplace-desktop-electron/dist-electron/installer-smoke.json
             workplace-desktop-electron/dist-electron/installer-lifecycle-smoke.json
+            workplace-desktop-electron/dist-electron/installer-upgrade-smoke.json
