@@ -1,12 +1,12 @@
 {
-  "release_id": "2026.07.12-r0.11",
+  "release_id": "2026.07.12-r0.12",
   "released_at": "2026-07-12",
   "components": {
     "root": {
-      "source_commit": "7c2d854aa9f229e0bc63a131e8858c0b99a23fc9"
+      "source_commit": "a1532fd3e75eb74f190cc94cbf394bb3f3eaa32a"
     },
     "api": {
-      "commit": "bcc7684e5c0422bcab55fcd8d8de862ae47828f4",
+      "commit": "c65c3fccb68661193ed7beb654db5e4d81ffea3c",
       "runtime_version": "1.0.1",
       "migration_head": "20260712_0031"
     },
