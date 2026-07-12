@@ -1,0 +1,204 @@
+name: release-readiness-gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-readiness-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  postgres-phase-one:
+    name: PostgreSQL and phase-one UI gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: workplace
+          POSTGRES_USER: workplace
+          POSTGRES_PASSWORD: workplace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workplace -d workplace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Create cross-repository read token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            workplace-project
+            workplace-api
+            workplace-desktop-electron
+          permission-contents: read
+
+      - name: Checkout pinned release baseline
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: workplace-api/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: workplace-desktop-electron/package-lock.json
+
+      - name: Verify release identity
+        run: node scripts/verify-release-manifest.mjs
+
+      - name: Install API dependencies
+        working-directory: workplace-api
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Install desktop dependencies
+        working-directory: workplace-desktop-electron
+        run: npm ci
+
+      - name: Run full backend regression
+        working-directory: workplace-api
+        run: pytest -q
+
+      - name: Migrate PostgreSQL release database
+        working-directory: workplace-api
+        env:
+          DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
+        run: python -m alembic upgrade head
+
+      - name: Start PostgreSQL-backed API
+        working-directory: workplace-api
+        env:
+          DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
+        run: |
+          mkdir -p ../work
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../work/release-api.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat ../work/release-api.log
+          exit 1
+
+      - name: Run PostgreSQL deployment smoke
+        working-directory: workplace-api
+        env:
+          DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
+        run: python scripts/smoke_deployment.py --base-url http://127.0.0.1:8000 --prefix root-release
+
+      - name: Run phase-one desktop release gate against PostgreSQL API
+        working-directory: workplace-desktop-electron
+        run: xvfb-run -a npm run test:release -- --base-url http://127.0.0.1:8000 --prefix root-release-ui
+
+      - name: Upload integration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-readiness-linux-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            work/release-api.log
+            work/sales-ui-smoke-*.png
+
+  windows-package:
+    name: Windows packaged application and installer gate
+    needs: postgres-phase-one
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Create cross-repository read token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            workplace-project
+            workplace-api
+            workplace-desktop-electron
+          permission-contents: read
+
+      - name: Checkout pinned release baseline
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: workplace-desktop-electron/package-lock.json
+
+      - name: Verify release identity
+        run: node scripts/verify-release-manifest.mjs
+
+      - name: Install desktop dependencies
+        working-directory: workplace-desktop-electron
+        run: npm ci
+
+      - name: Prepare pinned NSIS toolchain
+        working-directory: workplace-desktop-electron
+        run: |
+          $target = Join-Path $PWD 'work\electron-builder-binaries'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Invoke-WebRequest -Uri 'https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-3.0.4.1/nsis-3.0.4.1.7z' -OutFile (Join-Path $target 'nsis-3.0.4.1.7z')
+          Invoke-WebRequest -Uri 'https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-resources-3.4.1/nsis-resources-3.4.1.7z' -OutFile (Join-Path $target 'nsis-resources-3.4.1.7z')
+
+      - name: Build and launch unpacked application
+        working-directory: workplace-desktop-electron
+        run: |
+          npm run electron:build:dir
+          npm run test:package
+          npm run test:packaged-app
+
+      - name: Build and verify installer lifecycle
+        working-directory: workplace-desktop-electron
+        run: |
+          npm run electron:build:installer
+          node scripts/smoke-installer.mjs | Tee-Object -FilePath dist-electron/installer-smoke.json
+          node scripts/smoke-installer-lifecycle.mjs | Tee-Object -FilePath dist-electron/installer-lifecycle-smoke.json
+
+      - name: Upload verified installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: soloops-console-root-release-installer
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.0.exe
+            workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.0.exe.blockmap
+            workplace-desktop-electron/dist-electron/installer-smoke.json
+            workplace-desktop-electron/dist-electron/installer-lifecycle-smoke.json
