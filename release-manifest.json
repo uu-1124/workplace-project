@@ -6,7 +6,7 @@
       "source_commit": "a77e5f414466d5dc575fb9247a94bb2dce8a7ba4"
     },
     "api": {
-      "commit": "4d5a86ddc0c745e9014af1cf17a18a7f7ac5c31b",
+      "commit": "14bc62e02e5e6bd35dc761961660e29f77e22e8d",
       "runtime_version": "1.0.0",
       "migration_head": "20260712_0031"
     },
