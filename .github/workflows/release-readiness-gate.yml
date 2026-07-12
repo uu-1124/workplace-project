@@ -219,6 +219,7 @@ jobs:
           npm run electron:build:dir
           npm run test:package
           npm run test:packaged-app
+          npm run test:packaged-business-recovery
 
       - name: Build pinned previous installer
         working-directory: previous-desktop
@@ -230,7 +231,7 @@ jobs:
           npm run electron:build:installer
           node scripts/smoke-installer.mjs | Tee-Object -FilePath dist-electron/installer-smoke.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/smoke-installer-lifecycle.mjs | Tee-Object -FilePath dist-electron/installer-lifecycle-smoke.json
+          node scripts/smoke-installer-lifecycle.mjs --verify-business-recovery | Tee-Object -FilePath dist-electron/installer-lifecycle-smoke.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/smoke-installer-upgrade.mjs --previous-version 2.0.0 --previous-installer "..\previous-desktop\dist-electron\SoloOps Console Setup 2.0.0.exe" | Tee-Object -FilePath dist-electron/installer-upgrade-smoke.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
