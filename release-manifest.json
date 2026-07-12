@@ -1,0 +1,21 @@
+{
+  "release_id": "2026.07.12-r0.1",
+  "released_at": "2026-07-12",
+  "components": {
+    "root": { "source_commit": "0bf880f96687a7df5a84df572b2d8b0a3d096b34" },
+    "api": {
+      "commit": "d009cb89c33cd3ba1bc379fd844f7a2cab856700",
+      "runtime_version": "1.0.0",
+      "migration_head": "20260709_0030"
+    },
+    "desktop": {
+      "commit": "040452861deab5dd8ed221ef2af4b3ad6b8a5de8",
+      "package_version": "2.0.0"
+    }
+  },
+  "release_gate": {
+    "default_scope": "phase-one",
+    "command": "npm run test:release -- --prefix release",
+    "full_launch_compatibility": "npm run test:release -- --base-url http://example-host:8000 --prefix compatibility --include-full-launch"
+  }
+}
