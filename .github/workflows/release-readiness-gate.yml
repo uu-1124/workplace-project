@@ -94,6 +94,8 @@ jobs:
 
       - name: Configure Electron sandbox for Linux UI gates
         run: |
+          test -d /dev/shm
+          sudo chmod 1777 /dev/shm
           for sandbox in \
             workplace-desktop-electron/node_modules/electron/dist/chrome-sandbox \
             previous-desktop/node_modules/electron/dist/chrome-sandbox; do
