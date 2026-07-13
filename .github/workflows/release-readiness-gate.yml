@@ -103,6 +103,17 @@ jobs:
             sudo chown root:root "$sandbox"
             sudo chmod 4755 "$sandbox"
           done
+          for electron in \
+            workplace-desktop-electron/node_modules/electron/dist/electron \
+            previous-desktop/node_modules/electron/dist/electron; do
+            test -x "$electron"
+            mv "$electron" "$electron.bin"
+            printf '%s\n' \
+              '#!/usr/bin/env bash' \
+              'exec "$(dirname "$0")/electron.bin" --disable-dev-shm-usage "$@"' \
+              > "$electron"
+            chmod +x "$electron"
+          done
 
       - name: Run full backend regression
         working-directory: workplace-api
