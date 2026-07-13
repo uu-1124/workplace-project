@@ -110,7 +110,7 @@ jobs:
             mv "$electron" "$electron.bin"
             printf '%s\n' \
               '#!/usr/bin/env bash' \
-              'exec "$(dirname "$0")/electron.bin" --disable-dev-shm-usage "$@"' \
+              'exec "$(dirname "$0")/electron.bin" --no-sandbox --disable-dev-shm-usage "$@"' \
               > "$electron"
             chmod +x "$electron"
           done
