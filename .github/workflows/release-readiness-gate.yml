@@ -2,6 +2,16 @@ name: release-readiness-gate
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release-readiness-gate.yml"
+      - ".gitmodules"
+      - "release-manifest.json"
+      - "scripts/**"
+      - "workplace-api"
+      - "workplace-desktop-electron"
 
 permissions:
   contents: read
