@@ -10,7 +10,7 @@
 2.0.0 -> 2.0.1 -> 故障检测 -> 2.0.0 回滚
 ```
 
-本手册不代表产品已经达到正式 GA。当前安装器仍未完成正式代码签名，统一干净 Windows runner 的升级门禁也必须获得远端绿灯后，才能把此流程作为正式客户发布承诺。
+本手册不代表产品已经达到正式 GA。未签名安装器的统一干净 Windows runner 升级、故障检测和回滚门禁已经通过，但当前安装器仍未完成正式代码签名，且签名候选包尚未在干净 runner 复验，因此仍不能把它作为正式客户发布承诺。
 
 ## 2. 交付前必须具备的材料
 
@@ -21,8 +21,32 @@
 3. 上一个可回滚版本安装器：`SoloOps Console Setup 2.0.0.exe`。
 4. 本次发布说明及已知限制。
 5. 客户后端地址、团队信息和负责本次变更的支持联系人。
+6. 发布清单中记录的预期发布者完整 Subject、安装器 SHA-256 和签名门禁证据。
 
 不得只保存当前版本安装器而丢弃回滚版本。不得使用文件名不明、来源不明或版本号与发布清单不一致的安装包。
+
+### 2.1 安装前签名核验
+
+正式交付时，当前版本和回滚版本都必须通过以下核验，任何一项不满足都停止安装：
+
+```powershell
+$installer = Resolve-Path '.\SoloOps Console Setup 2.0.1.exe'
+$signature = Get-AuthenticodeSignature -LiteralPath $installer
+$signature.Status
+$signature.SignerCertificate.Subject
+$signature.TimeStamperCertificate.Subject
+Get-FileHash -LiteralPath $installer -Algorithm SHA256
+```
+
+验收要求：
+
+- `Status` 必须为 `Valid`；
+- `SignerCertificate.Subject` 必须与发布清单中的完整 Subject 精确一致；
+- `TimeStamperCertificate` 必须存在；
+- SHA-256 必须与发布清单一致；
+- 旧版回滚包与当前包必须属于同一预期发布者。
+
+不得因为“文件能运行”或临时绕过 Windows 提示就继续交付。安装后还必须核验 `SoloOps Console.exe` 和 `Uninstall SoloOps Console.exe`，只给最终安装器签名不算完成。
 
 ## 3. 客户状态边界
 
@@ -127,10 +151,20 @@ npm run test:installer:upgrade
 
 Desktop 仓库和根项目 Windows release workflow 都必须从固定提交 `7dda20c047627ac714898f08b18ca9787f000cf5` 重新构建 `2.0.0` 安装器，不允许依赖 runner 或开发机残留的旧安装包。
 
+正式签名候选包还必须提供预期发布者 Subject，并执行：
+
+```powershell
+$env:WINDOWS_EXPECTED_PUBLISHER_SUBJECT = '<发布清单中的完整 Subject>'
+npm run test:installer:lifecycle
+npm run test:installer:upgrade
+```
+
+签名模式会额外验证当前/旧版安装器、安装后的主程序和 NSIS 卸载器，要求发布者一致、时间戳存在，并确认隔离篡改副本不能通过 Authenticode 验证。普通未签名门禁不设置该环境变量，其绿灯不能充当正式签名证据。
+
 ## 10. 当前未关闭限制
 
-- 正式代码签名尚未完成。
-- 新增升级门禁尚需取得干净 Windows runner 远端绿灯。
+- 正式代码签名及签名候选包干净 Windows runner 证据尚未完成。
+- Azure Artifact Signing Public Trust 的法定发布主体与 Azure billing identity 资格尚未确认；Microsoft 当前公开范围不包含中国大陆主体，若发布主体不符合美国、加拿大、欧盟或英国组织资格，必须改用能为实际发布主体签发公开信任代码签名证书的供应商。
 - 当前只演练 `2.0.0 -> 2.0.1` 的 Windows 单机 NSIS 原位升级和回滚。
 - 未引入自动更新服务、增量更新或后台静默更新。
 - 服务端数据库迁移回滚不属于本客户端手册的覆盖范围。
