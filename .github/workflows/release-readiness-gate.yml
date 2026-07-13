@@ -92,6 +92,16 @@ jobs:
         working-directory: previous-desktop
         run: npm ci
 
+      - name: Configure Electron sandbox for Linux UI gates
+        run: |
+          for sandbox in \
+            workplace-desktop-electron/node_modules/electron/dist/chrome-sandbox \
+            previous-desktop/node_modules/electron/dist/chrome-sandbox; do
+            test -f "$sandbox"
+            sudo chown root:root "$sandbox"
+            sudo chmod 4755 "$sandbox"
+          done
+
       - name: Run full backend regression
         working-directory: workplace-api
         run: pytest -q
