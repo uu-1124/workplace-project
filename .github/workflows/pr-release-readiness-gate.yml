@@ -1,0 +1,575 @@
+name: PR release readiness
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - labeled
+      - unlabeled
+
+permissions: {}
+
+concurrency:
+  group: pr-release-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Base-controlled trust policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      requires_full_gate: ${{ steps.validate.outputs.requires_full_gate }}
+      privileged_change: ${{ steps.validate.outputs.privileged_change }}
+      root_head_sha: ${{ steps.validate.outputs.root_head_sha }}
+      base_api_sha: ${{ steps.validate.outputs.base_api_sha }}
+      base_desktop_sha: ${{ steps.validate.outputs.base_desktop_sha }}
+      api_sha: ${{ steps.validate.outputs.api_sha }}
+      desktop_sha: ${{ steps.validate.outputs.desktop_sha }}
+      release_id: ${{ steps.validate.outputs.release_id }}
+
+    steps:
+      - name: Checkout trusted policy from the base commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch candidate root objects without running candidate code
+        shell: bash
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$HEAD_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "Invalid PR head repository identity" >&2
+            exit 1
+          fi
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid PR head SHA" >&2
+            exit 1
+          fi
+          git fetch --no-tags --force "https://github.com/${HEAD_REPOSITORY}.git" "$HEAD_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$HEAD_SHA"
+
+      - name: Set up the pinned policy runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+
+      - name: Run PR trust-boundary regression
+        run: node --test scripts/pr-gate/test-pr-gate.mjs
+
+      - name: Validate candidate tree, manifest and protected paths
+        id: validate
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ALLOW_PRIVILEGED_CHANGES: ${{ contains(github.event.pull_request.labels.*.name, 'trusted-ci-change') }}
+        run: |
+          set -euo pipefail
+          node scripts/pr-gate/validate-pr-candidate.mjs \
+            --root "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --output "$GITHUB_OUTPUT" \
+            --allow-privileged "$ALLOW_PRIVILEGED_CHANGES"
+
+      - name: Publish policy classification
+        shell: bash
+        env:
+          ROOT_HEAD_SHA: ${{ steps.validate.outputs.root_head_sha }}
+          API_SHA: ${{ steps.validate.outputs.api_sha }}
+          DESKTOP_SHA: ${{ steps.validate.outputs.desktop_sha }}
+          RELEASE_ID: ${{ steps.validate.outputs.release_id }}
+          REQUIRES_FULL_GATE: ${{ steps.validate.outputs.requires_full_gate }}
+          PRIVILEGED_CHANGE: ${{ steps.validate.outputs.privileged_change }}
+        run: |
+          {
+            echo "### Base-controlled PR trust policy"
+            echo
+            echo "- Root candidate: \`$ROOT_HEAD_SHA\`"
+            echo "- API candidate: \`$API_SHA\`"
+            echo "- Desktop candidate: \`$DESKTOP_SHA\`"
+            echo "- Release identity: \`$RELEASE_ID\`"
+            echo "- Full private gate required: \`$REQUIRES_FULL_GATE\`"
+            echo "- Privileged CI change: \`$PRIVILEGED_CHANGE\`"
+            echo
+            echo "No pull-request code was executed and no release credential was available in this job."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  source-bundle:
+    name: Approved private source broker
+    needs: policy
+    if: >-
+      needs.policy.outputs.requires_full_gate == 'true' &&
+      github.event.pull_request.draft == false &&
+      vars.PR_RELEASE_ENVIRONMENT_CONFIGURED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    environment:
+      name: release-pr-trust
+      url: ${{ github.event.pull_request.html_url }}
+    outputs:
+      bundle_key: ${{ steps.encrypt.outputs.bundle_key }}
+      bundle_sha256: ${{ steps.encrypt.outputs.bundle_sha256 }}
+
+    steps:
+      - name: Checkout trusted packaging tools from the base commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-root
+          persist-credentials: false
+
+      - name: Checkout candidate manifest as inert data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ needs.policy.outputs.root_head_sha }}
+          path: candidate-root
+          persist-credentials: false
+
+      - name: Create short-lived cross-repository read token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            workplace-api
+            workplace-desktop-electron
+          permission-contents: read
+
+      - name: Checkout candidate API commit without executing it
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: ${{ github.repository_owner }}/workplace-api
+          ref: ${{ needs.policy.outputs.api_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: candidate-api
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout candidate Desktop commit without executing it
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: ${{ github.repository_owner }}/workplace-desktop-electron
+          ref: ${{ needs.policy.outputs.desktop_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: candidate-desktop
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout pinned previous Desktop source without executing it
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: ${{ github.repository_owner }}/workplace-desktop-electron
+          ref: 7dda20c047627ac714898f08b18ca9787f000cf5
+          token: ${{ steps.app-token.outputs.token }}
+          path: previous-desktop-source
+          persist-credentials: false
+
+      - name: Restrict private candidates to forward commits already on main
+        shell: bash
+        env:
+          BASE_API_SHA: ${{ needs.policy.outputs.base_api_sha }}
+          BASE_DESKTOP_SHA: ${{ needs.policy.outputs.base_desktop_sha }}
+          API_SHA: ${{ needs.policy.outputs.api_sha }}
+          DESKTOP_SHA: ${{ needs.policy.outputs.desktop_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate-api rev-parse HEAD)" = "$API_SHA"
+          test "$(git -C candidate-desktop rev-parse HEAD)" = "$DESKTOP_SHA"
+          git -C candidate-api merge-base --is-ancestor "$BASE_API_SHA" "$API_SHA"
+          git -C candidate-desktop merge-base --is-ancestor "$BASE_DESKTOP_SHA" "$DESKTOP_SHA"
+          git -C candidate-api merge-base --is-ancestor "$API_SHA" refs/remotes/origin/main
+          git -C candidate-desktop merge-base --is-ancestor "$DESKTOP_SHA" refs/remotes/origin/main
+
+      - name: Build an inert release source archive
+        shell: bash
+        env:
+          ROOT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          ROOT_HEAD_SHA: ${{ needs.policy.outputs.root_head_sha }}
+          API_SHA: ${{ needs.policy.outputs.api_sha }}
+          DESKTOP_SHA: ${{ needs.policy.outputs.desktop_sha }}
+          PREVIOUS_DESKTOP_SHA: 7dda20c047627ac714898f08b18ca9787f000cf5
+        run: |
+          set -euo pipefail
+          staging="$RUNNER_TEMP/release-source"
+          mkdir -p \
+            "$staging/workplace-api" \
+            "$staging/workplace-desktop-electron" \
+            "$staging/previous-desktop"
+          git -C candidate-api archive --format=tar HEAD | tar -xf - -C "$staging/workplace-api"
+          git -C candidate-desktop archive --format=tar HEAD | tar -xf - -C "$staging/workplace-desktop-electron"
+          git -C previous-desktop-source archive --format=tar HEAD | tar -xf - -C "$staging/previous-desktop"
+          cp candidate-root/release-manifest.json "$staging/release-manifest.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = {
+              "schema_version": 1,
+              "root_base_sha": os.environ["ROOT_BASE_SHA"],
+              "root_head_sha": os.environ["ROOT_HEAD_SHA"],
+              "api_commit": os.environ["API_SHA"],
+              "desktop_commit": os.environ["DESKTOP_SHA"],
+              "previous_desktop_commit": os.environ["PREVIOUS_DESKTOP_SHA"],
+          }
+          target = Path(os.environ["RUNNER_TEMP"]) / "release-source" / "release-source-metadata.json"
+          target.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+          PY
+          tar -czf "$RUNNER_TEMP/release-source.tar.gz" -C "$staging" .
+
+      - name: Encrypt private source before artifact handoff
+        id: encrypt
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="$RUNNER_TEMP/release-artifact"
+          mkdir -p "$artifact"
+          cp trusted-root/scripts/pr-gate/encrypted-release-bundle.mjs "$artifact/"
+          cp trusted-root/scripts/pr-gate/verify-assembled-release.mjs "$artifact/"
+          node trusted-root/scripts/pr-gate/encrypted-release-bundle.mjs encrypt \
+            --input "$RUNNER_TEMP/release-source.tar.gz" \
+            --output "$artifact/release-source.tar.gz.enc" \
+            --github-output "$GITHUB_OUTPUT"
+          rm -rf "$RUNNER_TEMP/release-source" "$RUNNER_TEMP/release-source.tar.gz"
+          test ! -e "$RUNNER_TEMP/release-source"
+          test ! -e "$RUNNER_TEMP/release-source.tar.gz"
+
+      - name: Upload encrypted source only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: encrypted-pr-release-source
+          if-no-files-found: error
+          retention-days: 1
+          path: ${{ runner.temp }}/release-artifact/*
+
+  postgres-phase-one:
+    name: PostgreSQL and phase-one UI gate
+    needs:
+      - policy
+      - source-bundle
+    if: needs.policy.outputs.requires_full_gate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions: {}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: workplace
+          POSTGRES_USER: workplace
+          POSTGRES_PASSWORD: workplace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workplace -d workplace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Download encrypted release source
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: encrypted-pr-release-source
+          path: release-input
+
+      - name: Decrypt and verify assembled release
+        shell: bash
+        env:
+          RELEASE_BUNDLE_KEY: ${{ needs.source-bundle.outputs.bundle_key }}
+          RELEASE_BUNDLE_SHA256: ${{ needs.source-bundle.outputs.bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          release_root="$RUNNER_TEMP/release-candidate"
+          mkdir -p "$release_root"
+          node release-input/encrypted-release-bundle.mjs decrypt \
+            --input release-input/release-source.tar.gz.enc \
+            --output "$RUNNER_TEMP/release-source.tar.gz" \
+            --expected-sha256 "$RELEASE_BUNDLE_SHA256"
+          tar -xzf "$RUNNER_TEMP/release-source.tar.gz" -C "$release_root"
+          node release-input/verify-assembled-release.mjs --root "$release_root"
+          rm "$RUNNER_TEMP/release-source.tar.gz"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ runner.temp }}/release-candidate/workplace-api/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/package-lock.json
+            ${{ runner.temp }}/release-candidate/previous-desktop/package-lock.json
+
+      - name: Install API dependencies
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Install Desktop dependencies
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        run: npm ci
+
+      - name: Install pinned previous Desktop dependencies
+        working-directory: ${{ runner.temp }}/release-candidate/previous-desktop
+        run: npm ci
+
+      - name: Configure Electron sandbox for Linux UI gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /dev/shm
+          sudo chmod 1777 /dev/shm
+          for sandbox in \
+            "$RUNNER_TEMP/release-candidate/workplace-desktop-electron/node_modules/electron/dist/chrome-sandbox" \
+            "$RUNNER_TEMP/release-candidate/previous-desktop/node_modules/electron/dist/chrome-sandbox"; do
+            test -f "$sandbox"
+            sudo chown root:root "$sandbox"
+            sudo chmod 4755 "$sandbox"
+          done
+          for electron in \
+            "$RUNNER_TEMP/release-candidate/workplace-desktop-electron/node_modules/electron/dist/electron" \
+            "$RUNNER_TEMP/release-candidate/previous-desktop/node_modules/electron/dist/electron"; do
+            test -x "$electron"
+            mv "$electron" "$electron.bin"
+            printf '%s\n' \
+              '#!/usr/bin/env bash' \
+              'exec "$(dirname "$0")/electron.bin" --no-sandbox --disable-dev-shm-usage "$@"' \
+              > "$electron"
+            chmod +x "$electron"
+          done
+
+      - name: Run full backend regression
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        run: pytest -q
+
+      - name: Migrate PostgreSQL release database
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        env:
+          DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
+        run: python -m alembic upgrade head
+
+      - name: Start PostgreSQL-backed API
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        env:
+          DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pr-release-work"
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/pr-release-work/release-api.log" 2>&1 &
+          for attempt in $(seq 1 30); do
+            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/pr-release-work/release-api.log"
+          exit 1
+
+      - name: Run PostgreSQL deployment smoke
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        env:
+          DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
+        run: python scripts/smoke_deployment.py --base-url http://127.0.0.1:8000 --prefix pr-release
+
+      - name: Run current Desktop release gate against PostgreSQL API
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        run: xvfb-run -a npm run test:release -- --base-url http://127.0.0.1:8000 --prefix pr-release-ui
+
+      - name: Run previous Desktop release gate against current PostgreSQL API
+        working-directory: ${{ runner.temp }}/release-candidate/previous-desktop
+        run: xvfb-run -a npm run test:release -- --base-url http://127.0.0.1:8000 --prefix pr-previous-release-ui
+
+      - name: Upload integration diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr-release-readiness-linux-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/pr-release-work/release-api.log
+            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/work/sales-ui-smoke-*.png
+            ${{ runner.temp }}/release-candidate/previous-desktop/work/sales-ui-smoke-*.png
+
+  windows-package:
+    name: Windows packaged application and installer gate
+    needs:
+      - policy
+      - source-bundle
+      - postgres-phase-one
+    if: needs.policy.outputs.requires_full_gate == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions: {}
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Download encrypted release source
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: encrypted-pr-release-source
+          path: release-input
+
+      - name: Decrypt and verify assembled release
+        env:
+          RELEASE_BUNDLE_KEY: ${{ needs.source-bundle.outputs.bundle_key }}
+          RELEASE_BUNDLE_SHA256: ${{ needs.source-bundle.outputs.bundle_sha256 }}
+        run: |
+          $releaseRoot = Join-Path $env:RUNNER_TEMP 'release-candidate'
+          New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
+          node release-input/encrypted-release-bundle.mjs decrypt `
+            --input release-input/release-source.tar.gz.enc `
+            --output (Join-Path $env:RUNNER_TEMP 'release-source.tar.gz') `
+            --expected-sha256 $env:RELEASE_BUNDLE_SHA256
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          tar -xzf (Join-Path $env:RUNNER_TEMP 'release-source.tar.gz') -C $releaseRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node release-input/verify-assembled-release.mjs --root $releaseRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'release-source.tar.gz') -Force
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ runner.temp }}/release-candidate/workplace-api/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ${{ runner.temp }}/release-candidate/workplace-desktop-electron/package-lock.json
+
+      - name: Install API dependencies
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        run: python -m pip install --upgrade pip; python -m pip install -r requirements.txt
+
+      - name: Install Desktop dependencies
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        run: npm ci
+
+      - name: Install pinned previous Desktop dependencies
+        working-directory: ${{ runner.temp }}/release-candidate/previous-desktop
+        run: npm ci
+
+      - name: Prepare pinned NSIS toolchain
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        run: |
+          $target = Join-Path $PWD 'work\electron-builder-binaries'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Invoke-WebRequest -Uri 'https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-3.0.4.1/nsis-3.0.4.1.7z' -OutFile (Join-Path $target 'nsis-3.0.4.1.7z')
+          Invoke-WebRequest -Uri 'https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-resources-3.4.1/nsis-resources-3.4.1.7z' -OutFile (Join-Path $target 'nsis-resources-3.4.1.7z')
+          $previousTarget = Join-Path (Resolve-Path '..\previous-desktop') 'work\electron-builder-binaries'
+          New-Item -ItemType Directory -Force -Path $previousTarget | Out-Null
+          Copy-Item -Path (Join-Path $target '*.7z') -Destination $previousTarget -Force
+
+      - name: Build and launch unpacked application
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        run: |
+          npm run electron:build:dir
+          npm run test:package
+          npm run test:packaged-app
+          npm run test:packaged-business-recovery
+
+      - name: Build pinned previous installer
+        working-directory: ${{ runner.temp }}/release-candidate/previous-desktop
+        run: npm run electron:build:installer
+
+      - name: Build and verify installer lifecycle
+        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        run: |
+          npm run electron:build:installer
+          node scripts/smoke-installer.mjs | Tee-Object -FilePath dist-electron/installer-smoke.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/smoke-installer-lifecycle.mjs --verify-business-recovery | Tee-Object -FilePath dist-electron/installer-lifecycle-smoke.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/smoke-installer-upgrade.mjs --previous-version 2.0.0 --previous-installer "..\previous-desktop\dist-electron\SoloOps Console Setup 2.0.0.exe" | Tee-Object -FilePath dist-electron/installer-upgrade-smoke.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload verified installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: soloops-console-pr-release-installer
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.1.exe
+            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.1.exe.blockmap
+            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/installer-smoke.json
+            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/installer-lifecycle-smoke.json
+            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/installer-upgrade-smoke.json
+
+  required-pr-gate:
+    name: Required PR gate
+    needs:
+      - policy
+      - source-bundle
+      - postgres-phase-one
+      - windows-package
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce the classified gate result
+        shell: bash
+        env:
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRES_FULL_GATE: ${{ needs.policy.outputs.requires_full_gate }}
+          SOURCE_RESULT: ${{ needs.source-bundle.result }}
+          LINUX_RESULT: ${{ needs.postgres-phase-one.result }}
+          WINDOWS_RESULT: ${{ needs.windows-package.result }}
+          ENVIRONMENT_CONFIGURED: ${{ vars.PR_RELEASE_ENVIRONMENT_CONFIGURED }}
+        run: |
+          set -euo pipefail
+          if [[ "$POLICY_RESULT" != "success" ]]; then
+            echo "Base-controlled PR policy did not pass." >&2
+            exit 1
+          fi
+          if [[ "$REQUIRES_FULL_GATE" != "true" ]]; then
+            echo "Documentation-only candidate passed without private repository access."
+            exit 0
+          fi
+          if [[ "$IS_DRAFT" == "true" ]]; then
+            echo "Release-affecting pull requests must leave draft state before the full gate." >&2
+            exit 1
+          fi
+          if [[ "$ENVIRONMENT_CONFIGURED" != "true" ]]; then
+            echo "The protected release-pr-trust environment has not been activated." >&2
+            exit 1
+          fi
+          if [[ "$SOURCE_RESULT" != "success" || "$LINUX_RESULT" != "success" || "$WINDOWS_RESULT" != "success" ]]; then
+            echo "Full PR gate failed: source=$SOURCE_RESULT linux=$LINUX_RESULT windows=$WINDOWS_RESULT" >&2
+            exit 1
+          fi
+          echo "Approved private source was tested on Linux/PostgreSQL and Windows without exposing release credentials to test code."

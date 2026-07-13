@@ -43,7 +43,7 @@ jobs:
     steps:
       - name: Create cross-repository read token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -55,7 +55,7 @@ jobs:
           permission-contents: read
 
       - name: Checkout pinned release baseline
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           token: ${{ steps.app-token.outputs.token }}
           submodules: recursive
@@ -63,7 +63,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout pinned previous desktop release
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: ${{ github.repository_owner }}/workplace-desktop-electron
           ref: 7dda20c047627ac714898f08b18ca9787f000cf5
@@ -72,20 +72,23 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: workplace-api/requirements.txt
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: |
             workplace-desktop-electron/package-lock.json
             previous-desktop/package-lock.json
+
+      - name: Run PR trust-boundary regression
+        run: node --test scripts/pr-gate/test-pr-gate.mjs
 
       - name: Verify release identity
         run: node scripts/verify-release-manifest.mjs
@@ -167,7 +170,7 @@ jobs:
 
       - name: Upload integration diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-readiness-linux-diagnostics
           if-no-files-found: warn
@@ -189,7 +192,7 @@ jobs:
     steps:
       - name: Create cross-repository read token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -201,7 +204,7 @@ jobs:
           permission-contents: read
 
       - name: Checkout pinned release baseline
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           token: ${{ steps.app-token.outputs.token }}
           submodules: recursive
@@ -209,7 +212,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout pinned previous desktop release
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: ${{ github.repository_owner }}/workplace-desktop-electron
           ref: 7dda20c047627ac714898f08b18ca9787f000cf5
@@ -218,14 +221,14 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: workplace-api/requirements.txt
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24"
           cache: npm
@@ -281,7 +284,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload verified installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: soloops-console-root-release-installer
           if-no-files-found: error
