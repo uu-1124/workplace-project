@@ -1,0 +1,16 @@
+name: spoof-required-check-probe
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  spoof:
+    name: Required PR gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Finish after the base-controlled rejection
+        run: |
+          sleep 75
+          echo "This candidate-controlled check must not satisfy branch protection."
