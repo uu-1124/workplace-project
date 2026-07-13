@@ -299,7 +299,7 @@ jobs:
           RELEASE_BUNDLE_SHA256: ${{ needs.source-bundle.outputs.bundle_sha256 }}
         run: |
           set -euo pipefail
-          release_root="$RUNNER_TEMP/release-candidate"
+          release_root="$GITHUB_WORKSPACE/release-candidate"
           mkdir -p "$release_root"
           node release-input/encrypted-release-bundle.mjs decrypt \
             --input release-input/release-source.tar.gz.enc \
@@ -314,7 +314,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: ${{ runner.temp }}/release-candidate/workplace-api/requirements.txt
+          cache-dependency-path: release-candidate/workplace-api/requirements.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
@@ -322,19 +322,19 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: |
-            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/package-lock.json
-            ${{ runner.temp }}/release-candidate/previous-desktop/package-lock.json
+            release-candidate/workplace-desktop-electron/package-lock.json
+            release-candidate/previous-desktop/package-lock.json
 
       - name: Install API dependencies
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-api
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
       - name: Install Desktop dependencies
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-desktop-electron
         run: npm ci
 
       - name: Install pinned previous Desktop dependencies
-        working-directory: ${{ runner.temp }}/release-candidate/previous-desktop
+        working-directory: ${{ github.workspace }}/release-candidate/previous-desktop
         run: npm ci
 
       - name: Configure Electron sandbox for Linux UI gates
@@ -344,15 +344,15 @@ jobs:
           test -d /dev/shm
           sudo chmod 1777 /dev/shm
           for sandbox in \
-            "$RUNNER_TEMP/release-candidate/workplace-desktop-electron/node_modules/electron/dist/chrome-sandbox" \
-            "$RUNNER_TEMP/release-candidate/previous-desktop/node_modules/electron/dist/chrome-sandbox"; do
+            "$GITHUB_WORKSPACE/release-candidate/workplace-desktop-electron/node_modules/electron/dist/chrome-sandbox" \
+            "$GITHUB_WORKSPACE/release-candidate/previous-desktop/node_modules/electron/dist/chrome-sandbox"; do
             test -f "$sandbox"
             sudo chown root:root "$sandbox"
             sudo chmod 4755 "$sandbox"
           done
           for electron in \
-            "$RUNNER_TEMP/release-candidate/workplace-desktop-electron/node_modules/electron/dist/electron" \
-            "$RUNNER_TEMP/release-candidate/previous-desktop/node_modules/electron/dist/electron"; do
+            "$GITHUB_WORKSPACE/release-candidate/workplace-desktop-electron/node_modules/electron/dist/electron" \
+            "$GITHUB_WORKSPACE/release-candidate/previous-desktop/node_modules/electron/dist/electron"; do
             test -x "$electron"
             mv "$electron" "$electron.bin"
             printf '%s\n' \
@@ -363,17 +363,17 @@ jobs:
           done
 
       - name: Run full backend regression
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-api
         run: pytest -q
 
       - name: Migrate PostgreSQL release database
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-api
         env:
           DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
         run: python -m alembic upgrade head
 
       - name: Start PostgreSQL-backed API
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-api
         env:
           DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
         shell: bash
@@ -391,17 +391,17 @@ jobs:
           exit 1
 
       - name: Run PostgreSQL deployment smoke
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-api
         env:
           DATABASE_URL: postgresql://workplace:workplace@127.0.0.1:5432/workplace
         run: python scripts/smoke_deployment.py --base-url http://127.0.0.1:8000 --prefix pr-release
 
       - name: Run current Desktop release gate against PostgreSQL API
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-desktop-electron
         run: xvfb-run -a npm run test:release -- --base-url http://127.0.0.1:8000 --prefix pr-release-ui
 
       - name: Run previous Desktop release gate against current PostgreSQL API
-        working-directory: ${{ runner.temp }}/release-candidate/previous-desktop
+        working-directory: ${{ github.workspace }}/release-candidate/previous-desktop
         run: xvfb-run -a npm run test:release -- --base-url http://127.0.0.1:8000 --prefix pr-previous-release-ui
 
       - name: Upload integration diagnostics
@@ -413,8 +413,8 @@ jobs:
           retention-days: 14
           path: |
             ${{ runner.temp }}/pr-release-work/release-api.log
-            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/work/sales-ui-smoke-*.png
-            ${{ runner.temp }}/release-candidate/previous-desktop/work/sales-ui-smoke-*.png
+            ${{ github.workspace }}/release-candidate/workplace-desktop-electron/work/sales-ui-smoke-*.png
+            ${{ github.workspace }}/release-candidate/previous-desktop/work/sales-ui-smoke-*.png
 
   windows-package:
     name: Windows packaged application and installer gate
@@ -442,7 +442,7 @@ jobs:
           RELEASE_BUNDLE_KEY: ${{ needs.source-bundle.outputs.bundle_key }}
           RELEASE_BUNDLE_SHA256: ${{ needs.source-bundle.outputs.bundle_sha256 }}
         run: |
-          $releaseRoot = Join-Path $env:RUNNER_TEMP 'release-candidate'
+          $releaseRoot = Join-Path $env:GITHUB_WORKSPACE 'release-candidate'
           New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
           node release-input/encrypted-release-bundle.mjs decrypt `
             --input release-input/release-source.tar.gz.enc `
@@ -460,29 +460,29 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: ${{ runner.temp }}/release-candidate/workplace-api/requirements.txt
+          cache-dependency-path: release-candidate/workplace-api/requirements.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: ${{ runner.temp }}/release-candidate/workplace-desktop-electron/package-lock.json
+          cache-dependency-path: release-candidate/workplace-desktop-electron/package-lock.json
 
       - name: Install API dependencies
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-api
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-api
         run: python -m pip install --upgrade pip; python -m pip install -r requirements.txt
 
       - name: Install Desktop dependencies
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-desktop-electron
         run: npm ci
 
       - name: Install pinned previous Desktop dependencies
-        working-directory: ${{ runner.temp }}/release-candidate/previous-desktop
+        working-directory: ${{ github.workspace }}/release-candidate/previous-desktop
         run: npm ci
 
       - name: Prepare pinned NSIS toolchain
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-desktop-electron
         run: |
           $target = Join-Path $PWD 'work\electron-builder-binaries'
           New-Item -ItemType Directory -Force -Path $target | Out-Null
@@ -493,7 +493,7 @@ jobs:
           Copy-Item -Path (Join-Path $target '*.7z') -Destination $previousTarget -Force
 
       - name: Build and launch unpacked application
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-desktop-electron
         run: |
           npm run electron:build:dir
           npm run test:package
@@ -501,11 +501,11 @@ jobs:
           npm run test:packaged-business-recovery
 
       - name: Build pinned previous installer
-        working-directory: ${{ runner.temp }}/release-candidate/previous-desktop
+        working-directory: ${{ github.workspace }}/release-candidate/previous-desktop
         run: npm run electron:build:installer
 
       - name: Build and verify installer lifecycle
-        working-directory: ${{ runner.temp }}/release-candidate/workplace-desktop-electron
+        working-directory: ${{ github.workspace }}/release-candidate/workplace-desktop-electron
         run: |
           npm run electron:build:installer
           node scripts/smoke-installer.mjs | Tee-Object -FilePath dist-electron/installer-smoke.json
@@ -522,11 +522,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.1.exe
-            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.1.exe.blockmap
-            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/installer-smoke.json
-            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/installer-lifecycle-smoke.json
-            ${{ runner.temp }}/release-candidate/workplace-desktop-electron/dist-electron/installer-upgrade-smoke.json
+            ${{ github.workspace }}/release-candidate/workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.1.exe
+            ${{ github.workspace }}/release-candidate/workplace-desktop-electron/dist-electron/SoloOps Console Setup 2.0.1.exe.blockmap
+            ${{ github.workspace }}/release-candidate/workplace-desktop-electron/dist-electron/installer-smoke.json
+            ${{ github.workspace }}/release-candidate/workplace-desktop-electron/dist-electron/installer-lifecycle-smoke.json
+            ${{ github.workspace }}/release-candidate/workplace-desktop-electron/dist-electron/installer-upgrade-smoke.json
 
   required-pr-gate:
     name: Required PR gate

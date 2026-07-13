@@ -245,5 +245,8 @@ test('workflow contract keeps credentials out of candidate test jobs and pins ac
   assert.match(broker, /Encrypt private source before artifact handoff/)
   assert.doesNotMatch(tests, /RELEASE_APP_PRIVATE_KEY|app-token\.outputs\.token|actions\/checkout@/)
   assert.equal((tests.match(/permissions: \{\}/g) ?? []).length, 2)
+  assert.match(tests, /github\.workspace }}\/release-candidate/)
+  assert.match(tests, /cache-dependency-path: release-candidate\/workplace-api\/requirements\.txt/)
+  assert.doesNotMatch(tests, /runner\.temp }}\/release-candidate/)
   assert.equal((prWorkflow.match(/candidate-root\/release-manifest\.json/g) ?? []).length, 1)
 })
