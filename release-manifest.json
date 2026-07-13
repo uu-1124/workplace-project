@@ -1,9 +1,9 @@
 {
-  "release_id": "2026.07.13-r0.17",
+  "release_id": "2026.07.13-r0.18",
   "released_at": "2026-07-13",
   "components": {
     "root": {
-      "source_commit": "108185e4054e897447cfc3273f2f1671bf5d0fa8"
+      "source_commit": "5efddf1f6e93c64f2311b0d839039ca3e050fc39"
     },
     "api": {
       "commit": "136d6c9a00a9bf7ae4851672c8c1b211eb49dc75",
