@@ -11,7 +11,7 @@
       "migration_head": "20260712_0031"
     },
     "desktop": {
-      "commit": "9df0b3226ba5fb0f2ec0bbf7ddeb69c853535019",
+      "commit": "7ee5bdc9f32c427c6d2dbf19c9d372101df42597",
       "package_version": "2.0.1"
     }
   },
